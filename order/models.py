@@ -35,4 +35,3 @@ class Order(models.Model):
     order_status = models.CharField(max_length=50)
     created_at = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
-

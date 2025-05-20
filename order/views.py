@@ -439,3 +439,122 @@ class UpdateOrderQuantityView(APIView):
             "message": "해당 항목이 삭제되었습니다.",
             "code": 204
         }, status=status.HTTP_204_NO_CONTENT)
+
+class FinalizeOrderView(APIView):
+    def post(self, request):
+        table_id = request.data.get("table_id")
+
+        if table_id is None:
+            return Response({
+                "status": "fail",
+                "message": "table_id가 필요합니다.",
+                "code": 400
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            cart = Cart.objects.get(table_id=table_id, cart_status=True)
+        except Cart.DoesNotExist:
+            return Response({
+                "status": "fail",
+                "message": "진행 중인 장바구니가 없습니다.",
+                "code": 404
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # 장바구니 확정 처리
+        cart.cart_status = False
+        cart.save()
+
+        return Response({
+            "status": "success",
+            "message": "주문이 완료되었습니다.",
+            "code": 201,
+            "data": {
+                "cart_id": cart.id,
+                "table_id": cart.table_id.id,
+                "total_price": cart.total_price
+            }
+        }, status=status.HTTP_201_CREATED)
+
+class LastOrderView(APIView):
+    def get(self, request, table_id):
+        # cart_status=False인 것 중에서 가장 최근 cart 하나 조회
+        cart = Cart.objects.filter(table_id=table_id, cart_status=False).order_by('-id').first()
+
+        if not cart:
+            return Response({
+                "status": "fail",
+                "message": "해당 테이블의 완료된 주문이 없습니다.",
+                "code": 404
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # 해당 cart에 연결된 주문들
+        orders = Order.objects.filter(cart_id=cart)
+        orders_serialized = TableOrderSerializer(orders, many=True).data
+
+        return Response({
+            "cart_id": cart.id,
+            "table_id": cart.table_id.id,
+            "cart_status": cart.cart_status,
+            "total_price": cart.total_price,
+            "orders": orders_serialized
+        }, status=status.HTTP_200_OK)
+
+class OrderCheckView(APIView):
+    def post(self, request, table_id):
+        password = request.data.get("order_check_password")
+
+        if not password:
+            return Response({
+                "status": "error",
+                "message": "비밀번호가 누락되었습니다.",
+                "code": 400,
+                "data": None
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 현재 로그인한 매니저 조회
+        try:
+            manager = Manager.objects.get(user=request.user)
+        except Manager.DoesNotExist:
+            return Response({
+                "status": "error",
+                "message": "접근 권한이 없습니다.",
+                "code": 403,
+                "data": None
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        # 비밀번호 검증
+        if manager.order_check_password != password:
+            return Response({
+                "status": "error",
+                "message": "비밀번호가 올바르지 않습니다.",
+                "code": 401,
+                "data": None
+            }, status=status.HTTP_401_UNAUTHORIZED)
+
+        # 테이블의 진행 중인 cart 찾기
+        try:
+            cart = Cart.objects.get(table_id=table_id, cart_status=True)
+        except Cart.DoesNotExist:
+            return Response({
+                "status": "error",
+                "message": "진행 중인 주문이 없습니다.",
+                "code": 404,
+                "data": None
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # cart 상태 변경
+        cart.cart_status = False
+        cart.save()
+
+        # 가장 최신 order 하나 상태 변경
+        order = Order.objects.filter(cart_id=cart).order_by('-created_at').first()
+        if order:
+            order.order_status = "completed"
+            order.save()
+
+        return Response({
+            "status": "success",
+            "message": "결제가 확인되었습니다.",
+            "code": 200,
+            "data": None
+        }, status=status.HTTP_200_OK)
